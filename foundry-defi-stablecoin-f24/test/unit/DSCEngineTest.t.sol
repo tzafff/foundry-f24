@@ -22,7 +22,7 @@ contract DSCEngineTest is Test {
 
     address public USER = makeAddr("user");
     uint256 public constant AMOUNT_COLLATERAL = 10 ether;
-    uint256 public constant amountToMint = 100 ether;
+    uint256 public amountToMint = 100 ether;
     uint256 public constant STARTING_ERC20_BALANCE = 10 ether;
     uint256 public constant MIN_HEALTH_FACTOR = 1e18;
     uint256 public constant LIQUIDATION_THRESHOLD = 50;
@@ -46,7 +46,7 @@ contract DSCEngineTest is Test {
         priceFeedAddresses.push(ethUsdPriceFeed);
         priceFeedAddresses.push(btcUsdPriceFeed);
 
-        vm.expectRevert(DSCEngine.DSCEngine__TokenAddressesAndPriceFeedAddressesMustBeSameLength.selector);
+        vm.expectRevert(DSCEngine.DSCEngine__TokenAddressesAndPriceFeedAddressesAmountsDontMatch.selector);
         new DSCEngine(tokenAddresses, priceFeedAddresses, address(dsc));
     }
 
@@ -81,10 +81,10 @@ contract DSCEngineTest is Test {
     }
 
     function testRevertsWithUnapprovedCollateral() public {
-        ERC20Mock ranToken = new ERC20Mock("RAN", "RAN", USER, AMOUNT_COLLATERAL);
+        ERC20Mock randToken = new ERC20Mock("RAN", "RAN", USER, 100e18);
         vm.startPrank(USER);
-        vm.expectRevert(DSCEngine.DSCEngine__NotAllowedToken.selector);
-        dsce.depositCollateral(address(ranToken), AMOUNT_COLLATERAL);
+        vm.expectRevert(abi.encodeWithSelector(DSCEngine.DSCEngine__TokenNotAllowed.selector, address(randToken)));
+        dsce.depositCollateral(address(randToken), AMOUNT_COLLATERAL);
         vm.stopPrank();
     }
 
@@ -118,6 +118,19 @@ contract DSCEngineTest is Test {
 
         assertEq(totalDscMinted, expectedTotalDscMinted);
         assertEq(AMOUNT_COLLATERAL, excpectedDepositedAmount);
+    }
+
+    function testRevertsIfMintedDscBreaksHealthFactor() public {
+        (, int256 price,,,) = MockV3Aggregator(ethUsdPriceFeed).latestRoundData();
+        amountToMint = (AMOUNT_COLLATERAL * (uint256(price) * dsce.getAdditionalFeedPrecision())) / dsce.getPrecision();
+        vm.startPrank(USER);
+        ERC20Mock(weth).approve(address(dsce), AMOUNT_COLLATERAL);
+
+        uint256 expectedHealthFactor =
+            dsce.calculateHealthFactor(amountToMint, dsce.getUsdValue(weth, AMOUNT_COLLATERAL));
+        vm.expectRevert(abi.encodeWithSelector(DSCEngine.DSCEngine__BreaksHealthFactor.selector, expectedHealthFactor));
+        dsce.depositCollateralAndMintDsc(weth, AMOUNT_COLLATERAL, amountToMint);
+        vm.stopPrank();
     }
 
     ///////////////////////////////////
@@ -160,16 +173,16 @@ contract DSCEngineTest is Test {
         vm.stopPrank();
     }
 
-    // function testCanBurnDsc() public depositedCollateralAndMintedDsc{
-    //     vm.startPrank(USER);
-    //     dsc.approve(address(dsce), amountToMint);
-    //     dsce.burnDsc(amountToMint);
-    //     vm.stopPrank();
+    function testCanBurnDsc() public depositedCollateralAndMintedDsc{
+        vm.startPrank(USER);
+        dsc.approve(address(dsce), amountToMint);
+        dsce.burnDsc(amountToMint);
+        vm.stopPrank();
 
-    //     uint256 userBalance = dsc.balanceOf(USER);
-    //     assertEq(userBalance, 0);
+        uint256 userBalance = dsc.balanceOf(USER);
+        assertEq(userBalance, 0);
     
-    // }
+    }
 
      ///////////////////////////////////
     // View & Pure Function Tests //
