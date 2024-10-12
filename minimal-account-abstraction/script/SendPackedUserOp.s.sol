@@ -13,7 +13,30 @@ import {DevOpsTools} from "lib/foundry-devops/src/DevOpsTools.sol";
 contract SendPackedUserOp is Script {
     using MessageHashUtils for bytes32;
 
-    function run() public {}
+    // Make sure you trust this user - don't run this on Mainnet!
+    address constant RANDOM_APPROVER = 0x8D85e590D1109CCc55e54A9e495b023E543b521E;
+
+    function run() public {
+        // Setup
+        HelperConfig helperConfig = new HelperConfig();
+        address dest = 0xaf88d065e77c8cC2239327C5EDb3A432268e5831; // arbitrum mainnet USDC address
+        uint256 value = 0;
+        address minimalAccountAddress = DevOpsTools.get_most_recent_deployment("MinimalAccount", block.chainid);
+
+        bytes memory functionData = abi.encodeWithSelector(IERC20.approve.selector, RANDOM_APPROVER, 1e18);
+        bytes memory executeCalldata =
+            abi.encodeWithSelector(MinimalAccount.execute.selector, dest, value, functionData);
+        PackedUserOperation memory userOp =
+            generateSignedUserOperation(executeCalldata, helperConfig.getConfig(), minimalAccountAddress);
+        PackedUserOperation[] memory ops = new PackedUserOperation[](1);
+        ops[0] = userOp;
+
+        // Send transaction
+        vm.startBroadcast();
+        IEntryPoint(helperConfig.getConfig().entryPoint).handleOps(ops, payable(helperConfig.getConfig().account));
+        vm.stopBroadcast();
+
+    }
 
     function generateSignedUserOperation(
         bytes memory callData,
