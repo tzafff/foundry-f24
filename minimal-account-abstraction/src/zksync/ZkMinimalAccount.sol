@@ -1,26 +1,22 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity 0.8.24;
 
 // zkSync Era Imports
 import {
     IAccount,
     ACCOUNT_VALIDATION_SUCCESS_MAGIC
 } from "lib/foundry-era-contracts/src/system-contracts/contracts/interfaces/IAccount.sol";
-
 import {
     Transaction,
     MemoryTransactionHelper
 } from "lib/foundry-era-contracts/src/system-contracts/contracts/libraries/MemoryTransactionHelper.sol";
-
 import {SystemContractsCaller} from
     "lib/foundry-era-contracts/src/system-contracts/contracts/libraries/SystemContractsCaller.sol";
-
 import {
     NONCE_HOLDER_SYSTEM_CONTRACT,
     BOOTLOADER_FORMAL_ADDRESS,
     DEPLOYER_SYSTEM_CONTRACT
 } from "lib/foundry-era-contracts/src/system-contracts/contracts/Constants.sol";
-
 import {INonceHolder} from "lib/foundry-era-contracts/src/system-contracts/contracts/interfaces/INonceHolder.sol";
 import {Utils} from "lib/foundry-era-contracts/src/system-contracts/contracts/libraries/Utils.sol";
 
@@ -49,26 +45,24 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 contract ZkMinimalAccount is IAccount, Ownable {
     using MemoryTransactionHelper for Transaction;
 
-    /*//////////////////////////////////////////////////////////////
-                           ERRORS
-    //////////////////////////////////////////////////////////////*/
     error ZkMinimalAccount__NotEnoughBalance();
     error ZkMinimalAccount__NotFromBootLoader();
     error ZkMinimalAccount__ExecutionFailed();
     error ZkMinimalAccount__NotFromBootLoaderOrOwner();
-    error ZkMinimalAccount_FailedToPay();
+    error ZkMinimalAccount__FailedToPay();
+    error ZkMinimalAccount__InvalidSignature();
 
     /*//////////////////////////////////////////////////////////////
-                           MODIFIERS
+                               MODIFIERS
     //////////////////////////////////////////////////////////////*/
-    modifier requiredFromBootLoader() {
+    modifier requireFromBootLoader() {
         if (msg.sender != BOOTLOADER_FORMAL_ADDRESS) {
             revert ZkMinimalAccount__NotFromBootLoader();
         }
         _;
     }
 
-    modifier requiredFromBootLoaderFromOwner() {
+    modifier requireFromBootLoaderOrOwner() {
         if (msg.sender != BOOTLOADER_FORMAL_ADDRESS && msg.sender != owner()) {
             revert ZkMinimalAccount__NotFromBootLoaderOrOwner();
         }
@@ -90,34 +84,35 @@ contract ZkMinimalAccount is IAccount, Ownable {
     function validateTransaction(bytes32, /*_txHash*/ bytes32, /*_suggestedSignedHash*/ Transaction memory _transaction)
         external
         payable
-        requiredFromBootLoader
+        requireFromBootLoader
         returns (bytes4 magic)
     {
-        return _validationTransaction(_transaction);
+        return _validateTransaction(_transaction);
     }
 
-    function executeTransaction(
-        bytes32, /*_txHash */
-        bytes32, /*_suggestedSignedHash */
-        Transaction memory _transaction
-    ) external payable requiredFromBootLoaderFromOwner {
+    function executeTransaction(bytes32, /*_txHash*/ bytes32, /*_suggestedSignedHash*/ Transaction memory _transaction)
+        external
+        payable
+        requireFromBootLoaderOrOwner
+    {
         _executeTransaction(_transaction);
     }
 
-    // There is no point in providing possible signed hash in the `executeTransactionFromOutside` method,
-    // since it typically should not be trusted.
     function executeTransactionFromOutside(Transaction memory _transaction) external payable {
-        _validationTransaction(_transaction);
+        bytes4 magic = _validateTransaction(_transaction);
+        if (magic != ACCOUNT_VALIDATION_SUCCESS_MAGIC) {
+            revert ZkMinimalAccount__InvalidSignature();
+        }
         _executeTransaction(_transaction);
     }
 
-    function payForTransaction(bytes32 /*_txHash */, bytes32 /*_suggestedSignedHash */, Transaction memory _transaction)
+    function payForTransaction(bytes32, /*_txHash*/ bytes32, /*_suggestedSignedHash*/ Transaction memory _transaction)
         external
         payable
     {
         bool success = _transaction.payToTheBootloader();
         if (!success) {
-            revert ZkMinimalAccount_FailedToPay();
+            revert ZkMinimalAccount__FailedToPay();
         }
     }
 
@@ -129,9 +124,8 @@ contract ZkMinimalAccount is IAccount, Ownable {
     /*//////////////////////////////////////////////////////////////
                            INTERNAL FUNCTIONS
     //////////////////////////////////////////////////////////////*/
-
-    function _validationTransaction(Transaction memory _transaction) internal returns (bytes4 magic) {
-        // Call onceholder
+    function _validateTransaction(Transaction memory _transaction) internal returns (bytes4 magic) {
+        // Call nonceholder
         // increment nonce
         // call(x, y, z) -> system contract call
         SystemContractsCaller.systemCallWithPropagatedRevert(
@@ -149,15 +143,14 @@ contract ZkMinimalAccount is IAccount, Ownable {
 
         // Check the signature
         bytes32 txHash = _transaction.encodeHash();
-        bytes32 convertedHash = MessageHashUtils.toEthSignedMessageHash(txHash);
-        address signer = ECDSA.recover(convertedHash, _transaction.signature);
+        // bytes32 convertedHash = MessageHashUtils.toEthSignedMessageHash(txHash);
+        address signer = ECDSA.recover(txHash, _transaction.signature);
         bool isValidSigner = signer == owner();
         if (isValidSigner) {
             magic = ACCOUNT_VALIDATION_SUCCESS_MAGIC;
         } else {
             magic = bytes4(0);
         }
-        // return the "magic" number
         return magic;
     }
 
